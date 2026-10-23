@@ -1,0 +1,11 @@
+# Personal data and results stay local; only the folder placeholders are tracked.
+RGB_to_LAB_converter/RawRGB_input/*
+!RGB_to_LAB_converter/RawRGB_input/.gitkeep
+RGB_to_LAB_converter/output/*
+!RGB_to_LAB_converter/output/.gitkeep
+
+# Excel lock files and OS clutter
+~$*
+Thumbs.db
+desktop.ini
+.DS_Store
