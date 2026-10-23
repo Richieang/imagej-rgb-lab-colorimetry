@@ -3,7 +3,8 @@ message: "If you use this workflow, please cite it as below."
 title: "ImageJ RGB to CIELAB Colorimetry Workflow"
 type: software
 authors:
-  - name: "ImageJ RGB to CIELAB Colorimetry Workflow contributors"
+  - given-names: "Richie"
+    family-names: "An"
 version: "1.0.0"
 date-released: "2026-10-23"
 license: MIT
