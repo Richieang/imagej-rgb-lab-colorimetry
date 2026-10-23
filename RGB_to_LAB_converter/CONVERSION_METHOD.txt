@@ -1,0 +1,266 @@
+RGB TO CIELAB CONVERSION - METHOD AND FORMULAS
+==============================================
+
+This document describes exactly how Convert.cmd turns the raw RGB values
+measured in ImageJ into corrected RGB, CIELAB (L*, a*, b*), Delta E*ab (CIE76)
+and hue angle. Every number in the output workbook follows these steps.
+A worked example with real values is given in section 6.
+
+
+1. OVERVIEW
+-----------
+
+  Raw RGB (ImageJ CSV)
+    -> mean black and white reference of each image
+    -> mean RGB of each sample well
+    -> white balance and black correction        (corrected RGB)
+    -> sRGB -> XYZ -> CIELAB (D65)                (L*, a*, b* per well)
+    -> mean and SD over the wells of each image   (L*, a*, b* per image)
+    -> comparison with a reference image          (Delta E, corrected b*)
+    -> hue angle from the mean a* and b*
+
+All RGB steps are done separately for the R, G and B channels and only within
+one image (one photo). Values from different photos are never mixed before the
+final comparison with the reference.
+
+
+2. INPUT DATA
+-------------
+
+The input is the raw-RGB CSV written by the ImageJ macro
+(Batch__RGB_Raw_ManualROI.csv, or the per-image *__RGB_Raw_3ROI.csv files of
+the original Black1 mode). Each row is one ROI (region of interest) with its
+mean R, G and B value (0-255, 8-bit).
+
+Columns used:
+  Source_File      the photo the ROI belongs to (one photo = one condition)
+  Condition_Value  the condition name, normally the photo name
+  Role / Region    BlackReference, WhiteReference or Sample
+  Well_Position    the well (sample group) label of a Sample ROI
+  ROI_Index        the order in which the ROIs were placed
+  R, G, B          mean channel values of the ROI
+
+A row is a black reference if Role or Region contains "black", a white
+reference if it contains "white", and a sample if it contains "sample".
+Each photo must contain at least one black reference, one white reference and
+one sample ROI.
+
+
+3. CALCULATION, STEP BY STEP
+----------------------------
+
+3.1 Reference means (per photo, per channel)
+
+  Black = mean of all black-reference ROIs of the photo
+  White = mean of all white-reference ROIs of the photo
+
+3.2 Assay RGB (per well, per channel)
+
+  Assay = mean of all Sample ROIs with the same Well_Position in the photo
+
+  If a well has several ROIs, they are averaged here, so each well gives one
+  Assay value.
+
+3.3 White balance and black correction (per channel)
+
+  Factor          = 255 / White
+  White-balanced  = Assay x Factor
+  Corrected       = White-balanced - Black
+
+  The white reference is scaled to 255, which removes differences in exposure
+  and colour cast between photos. The black reference (the dark offset of the
+  camera) is then subtracted.
+
+  Note: this is the formula of the original analysis template. It is not the
+  same as the two-point normalisation 255 x (Assay - Black) / (White - Black);
+  the two give slightly different values. Report which formula you used.
+
+3.4 Valid range
+
+  Each corrected channel is clipped to 0-255 before the colour conversion:
+
+    c = min(255, max(0, Corrected)) / 255
+
+  The unclipped corrected values stay visible in the "Well RGB" sheet.
+
+3.5 sRGB linearisation (removes the sRGB gamma, IEC 61966-2-1)
+
+    c_lin = c / 12.92                        if c <= 0.04045
+    c_lin = ((c + 0.055) / 1.055) ^ 2.4      otherwise
+
+3.6 Linear RGB -> XYZ (sRGB primaries, D65 white)
+
+    X = 0.412390799265959 R + 0.357584339383878 G + 0.180480788401834 B
+    Y = 0.212639005871510 R + 0.715168678767756 G + 0.072192315360734 B
+    Z = 0.019330818715592 R + 0.119194779794626 G + 0.950532152249660 B
+
+  (R, G, B here are the linear values c_lin, between 0 and 1.)
+
+3.7 Normalisation to the D65 reference white
+
+    x = X / 0.95047      y = Y / 1.00000      z = Z / 1.08883
+
+3.8 CIELAB (CIE 1976 L*a*b*)
+
+    f(t) = t ^ (1/3)                          if t > 216/24389  (= 0.008856)
+    f(t) = ((24389/27) t + 16) / 116          otherwise         (24389/27 = 903.3)
+
+    L* = 116 f(y) - 16          lightness, 0 (black) to 100 (white)
+    a* = 500 [f(x) - f(y)]      + red   / - green
+    b* = 200 [f(y) - f(z)]      + yellow / - blue
+
+  This gives L*, a* and b* for every well.
+
+3.9 Result per photo (condition)
+
+    L* mean, a* mean, b* mean = mean over the included wells of the photo
+    L* SD, a* SD, b* SD       = sample standard deviation over the wells (n - 1)
+                                (blank when the photo has only one well)
+    Corrected R/G/B mean      = mean of the unclipped corrected values
+    100 - L* mean             = mean of (100 - L*), a darkness measure
+
+  Note: the LAB values of the wells are averaged, not the RGB values.
+
+3.10 Reference photo
+
+  Delta E and corrected b* are calculated against one reference photo:
+    - by default the photo with concentration 0;
+    - otherwise the lowest concentration;
+    - otherwise the first named condition.
+  A different reference can be chosen in conversion_settings.json
+  ("reference_file" or "reference_value", see engine/README.txt).
+
+3.11 Differences and Delta E*ab (CIE76)
+
+    Delta L* = L* mean - L* reference
+    Delta a* = a* mean - a* reference
+    Delta b* = b* mean - b* reference      (also reported as "Corrected b*")
+
+    Delta E*ab = sqrt( (Delta L*)^2 + (Delta a*)^2 + (Delta b*)^2 )
+
+  The reference values are the mean L*, a*, b* of the reference photo, so the
+  reference photo itself has Delta E = 0.
+
+3.12 Hue angle
+
+    h = atan2(b*, a*) x 180 / pi, wrapped to 0-360 degrees
+
+  computed from the mean a* and mean b* of the photo (not by averaging the hue
+  angles of the wells). 0 = red (+a*), 90 = yellow (+b*), 180 = green (-a*),
+  270 = blue (-b*).
+
+
+4. CONDITIONS AND CONCENTRATIONS
+--------------------------------
+
+The concentration is read from Condition_Value (normally the photo name):
+
+  - a number followed by pg, ng, ug or mg (optionally "per mL" or "/mL"),
+    for example 31.3pg_per_ml, is converted to pg/mL
+    (ng x 1,000; ug x 1,000,000; mg x 1,000,000,000);
+  - a number followed by pM, nM, uM, mM or M is converted to nM;
+  - "u", "micro" sign and Greek "mu" are treated the same;
+  - a name without such a number (for example A-, NS, blank) is kept as a
+    text label.
+
+Photos are sorted by concentration (numbers first, ascending), then named
+conditions in measurement order. One file must use one kind of unit.
+
+
+5. WELL SELECTION (OPTIONAL)
+----------------------------
+
+"selected_wells" in conversion_settings.json limits which wells are used.
+Wells are matched by name, by number ("Well2" matches "Well2BL") or by
+position ("BottomRight" matches "Well4BR"). Excluded wells are still listed in
+the "Raw RGB" sheet, marked "No". The reference photo uses the same wells.
+
+
+6. WORKED EXAMPLE
+-----------------
+
+Data: examples/example_Batch__RGB_Raw_ManualROI.csv (in the project repository)
+Photo 0pg_per_ml_10ul_9 1AuNR.jpg, well Well1TL (values rounded).
+
+  Black ROIs     11.510 / 9.062 / 8.828   and   5.208 / 5.218 / 5.248
+  Black (mean)    8.359 / 7.140 / 7.038                        (R / G / B)
+  White ROIs    224.212 / 219.535 / 205.938  and  223.367 / 218.017 / 205.580
+  White (mean)  223.789 / 218.776 / 205.759
+  Assay         186.381 / 173.524 / 163.964
+
+  Factor        255 / White        = 1.13946 / 1.16558 / 1.23931
+  White-bal.    Assay x Factor     = 212.374 / 202.255 / 203.203
+  Corrected     White-bal. - Black = 204.015 / 195.115 / 196.165
+
+  c_lin                            = 0.60393 / 0.54645 / 0.55305
+  X, Y, Z                          = 0.54427 / 0.55915 / 0.60250
+  x, y, z (D65 normalised)         = 0.57263 / 0.55915 / 0.55335
+  f(x), f(y), f(z)                 = 0.83041 / 0.82384 / 0.82098
+
+  L* = 116 x 0.82384 - 16          = 79.565
+  a* = 500 x (0.83041 - 0.82384)   =  3.286
+  b* = 200 x (0.82384 - 0.82098)   =  0.572
+
+The four wells of this photo give
+  L* = 79.57, 78.51, 93.35, 84.92   a* = 3.29, 4.39, -2.34, -2.85
+  b* = 0.57, 8.73, 6.80, 7.95
+so the photo result is
+  L* = 84.089 (SD 6.786), a* = 0.621 (SD 3.748), b* = 6.012 (SD 3.713)
+  hue angle = atan2(6.012, 0.621) = 84.1 degrees
+
+With 0 pg/mL as the reference:
+
+  Photo        L*      a*      b*     Delta L*  Delta a*  Delta b*  Delta E  Hue
+  0 pg/mL     84.089   0.621   6.012    0.000     0.000     0.000    0.000   84.1
+  31.3 pg/mL  72.851  -2.785  13.152  -11.237    -3.405     7.140   13.742  102.0
+  62.5 pg/mL  74.120  -3.765  22.709   -9.968    -4.386    16.697   19.935   99.4
+  125 pg/mL   75.090  -6.837  43.973   -8.999    -7.458    37.961   39.720   98.8
+
+  e.g. 31.3 pg/mL: Delta E = sqrt(11.237^2 + 3.405^2 + 7.140^2) = 13.742
+
+These are the values in
+examples/example_Batch__RGB_Raw_ManualROI_LAB_DeltaE_Hue.xlsx.
+
+
+7. OUTPUT WORKBOOK
+------------------
+
+  README             summary of the dataset and of the method
+  Summary            one row per photo: corrected RGB, L*, a*, b* with SD,
+                     corrected b*, 100 - L*, b* of each well, Delta E, hue
+  Well RGB           per well: Assay, Black, White, Factor, white-balanced
+                     and corrected RGB
+  LAB Calculations   per well: corrected RGB, L*, a*, b*, 100 - L*
+  Delta E and Hue    per photo: mean LAB, reference LAB, Delta L*, Delta a*,
+                     Delta b*, Delta E and hue angle
+  Raw RGB            every input row, marked Yes / Reference / No
+
+
+8. NOTES AND LIMITATIONS
+------------------------
+
+  - The colour values are only as good as the photos: use fixed lighting,
+    avoid glare, and make sure the white reference is not saturated (raw
+    values close to 255 in all channels).
+  - The camera image is treated as sRGB with a D65 white point. This is a
+    standard approximation for phone and camera JPEGs, not a calibrated
+    colour measurement.
+  - Delta E uses the CIE76 formula (straight-line distance in L*a*b*). Newer
+    formulas such as CIEDE2000 are closer to human perception for small
+    differences but are not calculated here.
+  - The hue angle becomes unstable when a* and b* are both close to 0 (an
+    almost grey colour), because the direction of a very short vector is
+    poorly defined. In the example, the 0 pg/mL photo (a* = 0.6, b* = 6.0)
+    is close to this range.
+  - Clipping (section 3.4) only matters when a corrected value is below 0 or
+    above 255; check the "Well RGB" sheet if this is suspected.
+
+
+9. REFERENCES
+-------------
+
+  - CIE 15:2004, Colorimetry, 3rd edition. Commission Internationale de
+    l'Eclairage. (CIELAB, Delta E*ab, hue angle)
+  - ISO/CIE 11664-4:2019, Colorimetry - Part 4: CIE 1976 L*a*b* colour space.
+  - IEC 61966-2-1:1999, Multimedia systems and equipment - Colour measurement
+    and management - Part 2-1: Default RGB colour space - sRGB.

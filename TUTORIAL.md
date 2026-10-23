@@ -368,6 +368,8 @@ using the mean a\* and b\* of the image.
 
 The same formulas are written into the *README*, *LAB Calculations* and
 *ΔE and Hue angle* sheets of every workbook, so the result is self-documenting.
+A full description with a worked numerical example is in
+[`RGB_to_LAB_converter/CONVERSION_METHOD.txt`](RGB_to_LAB_converter/CONVERSION_METHOD.txt).
 
 ---
 
